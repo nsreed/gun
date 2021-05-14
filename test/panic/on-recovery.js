@@ -37,15 +37,6 @@ panic.server().on('request', function (req, res) {
 var clients = panic.clients;
 var manager = require('panic-manager')();
 
-manager.start({
-	clients: Array(config.servers).fill().map(function (u, i) {
-		return {
-			type: 'node',
-			port: config.port + (i + 1)
-		}
-	}),
-	panic: 'http://' + config.IP + ':' + config.port
-});
 
 var servers = clients.filter('Node.js');
 var bob = servers.pluck(1);
@@ -58,16 +49,25 @@ var lc = "default";
 
 describe("gun.on should receive updates after crashed relay peer comes back online with ", function () {
 	this.timeout(10 * 1000);
-	
-	before("Servers have joined!", function () {
-		return servers.atLeast(config.servers);
-	});
 	libs.forEach(function (lc) {
 		describe("client configuration " + lc, function () {
 			const permutation = this;
+
+			before("Servers have joined!", function () {
+				manager.start({
+					clients: Array(config.servers).fill().map(function (u, i) {
+						return {
+							type: 'node',
+							port: config.port + (i + 1)
+						}
+					}),
+					panic: 'http://' + config.IP + ':' + config.port
+				});
+				return servers.atLeast(config.servers);
+			});
 			it("Waited 1 second", function (done) {
-				require('./util/open').cleanup(); // Try to close any existing clients from earlier crashed tests
-	
+				// require('./util/open').cleanup(); // Try to close any existing clients from earlier crashed tests
+
 				setTimeout(done, 1000);
 			});
 			it("GUN started!", function () {
@@ -234,17 +234,25 @@ describe("gun.on should receive updates after crashed relay peer comes back onli
 					}, 10);
 				});
 			});
-			// after('closing browsers', function(){
-			// 	return require('./util/open').cleanup();
-			// });
+			after('closing browsers', function (done) {
+				bob.run(function () {
+					process.exit();
+				});
+				carl.run(function () {
+					process.exit();
+				});
+				require('./util/open').cleanup();
+				setTimeout(done, 1000);
+			});
 		});
-
-		// }
 	});
-	after("Everything shut down.", function () {
-		return bob.run(function () {
-			// permutation.done();
-			process.exit();
-		});
-	});
+	// after('closing servers', function () {
+	// 	bob.run(function () {
+	// 		process.exit();
+	// 	});
+	// 	carl.run(function () {
+	// 		process.exit();
+	// 	});
+	// 	return require('./util/open').cleanup();
+	// });
 });
