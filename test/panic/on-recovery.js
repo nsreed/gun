@@ -8,15 +8,6 @@
 // visible/active throughout the tests, because an inactive tab will NOT
 // reconnect to the relay peer until the tab is active again. (Chrome 83)
 
-// the libraries to try running this test with
-var libs = ['radisk', 'webrtc'];
-// Gun constructor options to provide when including these libraries
-var libConfigs = {
-	radisk: {
-		localStorage: false
-	}
-}
-
 var config = {
 	IP: require('ip').address(),
 	port: 8765,
@@ -37,6 +28,15 @@ panic.server().on('request', function (req, res) {
 var clients = panic.clients;
 var manager = require('panic-manager')();
 
+manager.start({
+	clients: Array(config.servers).fill().map(function (u, i) {
+		return {
+			type: 'node',
+			port: config.port + (i + 1)
+		}
+	}),
+	panic: 'http://' + config.IP + ':' + config.port
+});
 
 var servers = clients.filter('Node.js');
 var bob = servers.pluck(1);
@@ -45,214 +45,181 @@ var browsers = clients.excluding(servers);
 var alice = browsers.pluck(1);
 var dave = browsers.excluding(alice).pluck(1);
 
-var lc = "default";
+describe("gun.on should receive updates after crashed relay peer comes back online", function () {
+	this.timeout(10 * 60 * 1000);
 
-describe("gun.on should receive updates after crashed relay peer comes back online with ", function () {
-	this.timeout(10 * 1000);
-	libs.forEach(function (lc) {
-		describe("client configuration " + lc, function () {
-			const permutation = this;
+	it("Servers have joined!", function () {
+		return servers.atLeast(config.servers);
+	});
 
-			before("Servers have joined!", function () {
-				manager.start({
-					clients: Array(config.servers).fill().map(function (u, i) {
-						return {
-							type: 'node',
-							port: config.port + (i + 1)
-						}
-					}),
-					panic: 'http://' + config.IP + ':' + config.port
-				});
-				return servers.atLeast(config.servers);
+	it("GUN started!", function () {
+		return bob.run(function (test) {
+			var env = test.props;
+			var filepath = env.dir + '/data';
+			test.async();
+			var fs = require('fs');
+			try {if (fs.existsSync(filepath)) {fs.rmdirSync(filepath, {recursive: true});} } catch (e) {console.error(e); test.fail('');}
+			var server = require('http').createServer(function (req, res) {
+				res.end("I AM BOB");
 			});
-			it("Waited 1 second", function (done) {
-				// require('./util/open').cleanup(); // Try to close any existing clients from earlier crashed tests
-
-				setTimeout(done, 1000);
+			var port = env.config.port + 1;
+			try {var Gun = require(env.dir + '/../../index.js');} catch (e) {console.error(e); test.fail('');}
+			var gun = Gun({file: filepath, web: server});
+			server.listen(port, function () {
+				test.done();
 			});
-			it("GUN started!", function () {
-				return bob.run(function (test) {
-					var env = test.props;
-					var filepath = env.dir + '/data';
-					test.async();
-					var fs = require('fs');
-					try {if (fs.existsSync(filepath)) {fs.rmdirSync(filepath, {recursive: true});} } catch (e) {console.error(e); test.fail('');}
-					var server = require('http').createServer(function (req, res) {
-						res.end("I AM BOB");
-					});
-					var port = env.config.port + 1;
-					try {var Gun = require(env.dir + '/../../index.js');} catch (e) {console.error(e); test.fail('');}
-					var gun = Gun({file: filepath, web: server});
-					server.listen(port, function () {
-						test.done();
-					});
-				}, {config: config, dir: __dirname});
-			});
+		}, {config: config, dir: __dirname});
+	});
 
-			it(config.browsers + " browser(s) have joined!", function () {
-				require('./util/open').web(config.browsers, "http://" + config.IP + ":" + config.port);
-				return browsers.atLeast(config.browsers);
-			});
+	it(config.browsers + " browser(s) have joined!", function () {
+		require('./util/open').web(config.browsers, "http://" + config.IP + ":" + config.port);
+		return browsers.atLeast(config.browsers);
+	});
 
-			it("Browsers initialized gun!", function () {
-				var tests = [], i = 0;
-				browsers.each(function (client, id) {
-					tests.push(client.run(function (test) {
-						try {localStorage.clear()} catch (e) { }
-						try {indexedDB.deleteDatabase('radata')} catch (e) { }
-						var env = test.props;
-						var gun = Gun('http://' + env.config.IP + ':' + (env.config.port + 1) + '/gun');
-						window.ref = gun.get('a');
-					}, {i: i += 1, config: config}));
-				});
-				return Promise.all(tests);
-			});
+	it("Browsers initialized gun!", function () {
+		var tests = [], i = 0;
+		browsers.each(function (client, id) {
+			tests.push(client.run(function (test) {
+				try {localStorage.clear()} catch (e) { }
+				try {indexedDB.deleteDatabase('radata')} catch (e) { }
+				var env = test.props;
+				var gun = Gun('http://' + env.config.IP + ':' + (env.config.port + 1) + '/gun');
+				window.ref = gun.get('a');
+			}, {i: i += 1, config: config}));
+		});
+		return Promise.all(tests);
+	});
 
-			it("Dave subscribed to updates using gun.on()", function () {
-				return dave.run(function (test) {
-					console.log("I AM DAVE");
-					test.async();
-					ref.on(function (data) {
-						console.log("Just received data: ", data);
-						if (data.hello === 'world') {window.receivedFirst = true;}
-						if (data.foo === 'bar') {window.receivedSecond = true;}
-					});
+	it("Dave subscribed to updates using gun.on()", function () {
+		return dave.run(function (test) {
+			console.log("I AM DAVE");
+			test.async();
+			ref.on(function (data) {
+				console.log("Just received data: ", data);
+				if (data.hello === 'world') {window.receivedFirst = true;}
+				if (data.foo === 'bar') {window.receivedSecond = true;}
+			});
+			test.done();
+		});
+	});
+
+	it("Alice put first data", function () {
+		return alice.run(function (test) {
+			console.log("I AM ALICE");
+			test.async();
+			ref.put({hello: 'world'}, function (ack) {
+				if (!ack.err) {
 					test.done();
-				});
-			});
-
-			it("Alice put first data", function () {
-				return alice.run(function (test) {
-					console.log("I AM ALICE");
-					test.async();
-					ref.put({hello: 'world'}, function (ack) {
-						if (!ack.err) {
-							test.done();
-						}
-					});
-				});
-			});
-
-			it("Dave received first data", function () {
-				return dave.run(function (test) {
-					test.async();
-					var myInterval;
-					myInterval = setInterval(function () {
-						if (window.receivedFirst) {
-							clearInterval(myInterval);
-							test.done();
-						}
-					}, 10);
-				});
-			});
-
-			it("Killed relay peer", function () {
-				return bob.run(function (test) {
-					test.async();
-					process.exit();
-				});
-			});
-
-			it("Waited 1 second", function (done) {
-				setTimeout(done, 1000);
-			});
-
-			it("Alice put second data", function () {
-				return alice.run(function (test) {
-					test.async();
-					ref.put({foo: 'bar'}, function (ack) {
-						if (!ack.err) {
-							test.done();
-						}
-					});
-				});
-			});
-
-			// FIXME: Don't copy paste the entire block!!
-			it("Restored relay peer", function () {
-				return carl.run(function (test) {
-					var env = test.props;
-					var filepath = env.dir + '/data';
-					test.async();
-					var fs = require('fs');
-					try {if (fs.existsSync(filepath)) {fs.rmdirSync(filepath, {recursive: true});} } catch (e) {console.error(e); test.fail('');}
-					var server = require('http').createServer(function (req, res) {
-						res.end("I AM CARL");
-					});
-					var port = env.config.port + 1;
-					try {var Gun = require(env.dir + '/../../index.js');} catch (e) {console.error(e); test.fail('');}
-					var gun = Gun({file: filepath, web: server});
-					server.listen(port, function () {
-						test.done();
-					});
-				}, {config: config, dir: __dirname});
-			});
-
-			it("Browsers reconnected", function () {
-				var tests = [], i = 0;
-				browsers.each(function (client, id) {
-					tests.push(client.run(function (test) {
-						test.async();
-						var config = test.props.config;
-						var seconds = 15;
-						var timeout = Date.now() + seconds * 1000;
-						var url = "http://" + config.IP + ":" + (config.port + 1) + "/gun";
-						var peers = ref.back(1)._.opt.peers;
-						var i;
-						i = setInterval(function () {
-							if (peers[url] && peers[url].wire.readyState === 1) {
-								clearInterval(i);
-								test.done();
-								return;
-							}
-							if (Date.now() >= timeout) {
-								test.fail('Timed out after ' + seconds + ' seconds');
-								return;
-							}
-						}, 10);
-					}, {config: config}));
-				});
-				return Promise.all(tests);
-			});
-
-			it("Dave received second data", function () {
-				return dave.run(function (test) {
-					test.async();
-					var seconds = 60;
-					var timeout = Date.now() + seconds * 1000;
-					var i;
-					i = setInterval(function () {
-						if (window.receivedSecond) {
-							// permutation.done();
-							test.done();
-							return;
-						}
-						if (Date.now() >= timeout) {
-							test.fail('Timed out after ' + seconds + ' seconds');
-							return;
-						}
-					}, 10);
-				});
-			});
-			after('closing browsers', function (done) {
-				bob.run(function () {
-					process.exit();
-				});
-				carl.run(function () {
-					process.exit();
-				});
-				require('./util/open').cleanup();
-				setTimeout(done, 1000);
+				}
 			});
 		});
 	});
-	// after('closing servers', function () {
-	// 	bob.run(function () {
-	// 		process.exit();
-	// 	});
-	// 	carl.run(function () {
-	// 		process.exit();
-	// 	});
-	// 	return require('./util/open').cleanup();
-	// });
+
+	it("Dave received first data", function () {
+		return dave.run(function (test) {
+			test.async();
+			var myInterval;
+			myInterval = setInterval(function () {
+				if (window.receivedFirst) {
+					clearInterval(myInterval);
+					test.done();
+				}
+			}, 10);
+		});
+	});
+
+	it("Killed relay peer", function () {
+		return bob.run(function (test) {
+			test.async();
+			process.exit();
+		});
+	});
+
+	it("Waited 1 second", function (done) {
+		setTimeout(done, 1000);
+	});
+
+	it("Alice put second data", function () {
+		return alice.run(function (test) {
+			test.async();
+			ref.put({foo: 'bar'}, function (ack) {
+				if (!ack.err) {
+					test.done();
+				}
+			});
+		});
+	});
+
+	// FIXME: Don't copy paste the entire block!!
+	it("Restored relay peer", function () {
+		return carl.run(function (test) {
+			var env = test.props;
+			var filepath = env.dir + '/data';
+			test.async();
+			var fs = require('fs');
+			try {if (fs.existsSync(filepath)) {fs.rmdirSync(filepath, {recursive: true});} } catch (e) {console.error(e); test.fail('');}
+			var server = require('http').createServer(function (req, res) {
+				res.end("I AM CARL");
+			});
+			var port = env.config.port + 1;
+			try {var Gun = require(env.dir + '/../../index.js');} catch (e) {console.error(e); test.fail('');}
+			var gun = Gun({file: filepath, web: server});
+			server.listen(port, function () {
+				test.done();
+			});
+		}, {config: config, dir: __dirname});
+	});
+
+	it("Browsers reconnected", function () {
+		var tests = [], i = 0;
+		browsers.each(function (client, id) {
+			tests.push(client.run(function (test) {
+				test.async();
+				var config = test.props.config;
+				var seconds = 15;
+				var timeout = Date.now() + seconds * 1000;
+				var url = "http://" + config.IP + ":" + (config.port + 1) + "/gun";
+				var peers = ref.back(1)._.opt.peers;
+				var i;
+				i = setInterval(function () {
+					if (peers[url] && peers[url].wire.readyState === 1) {
+						clearInterval(i);
+						test.done();
+						return;
+					}
+					if (Date.now() >= timeout) {
+						test.fail('Timed out after ' + seconds + ' seconds');
+						return;
+					}
+				}, 10);
+			}, {config: config}));
+		});
+		return Promise.all(tests);
+	});
+
+	it("Dave received second data", function () {
+		return dave.run(function (test) {
+			test.async();
+			var seconds = 60;
+			var timeout = Date.now() + seconds * 1000;
+			var i;
+			i = setInterval(function () {
+				if (window.receivedSecond) {
+					test.done();
+					return;
+				}
+				if (Date.now() >= timeout) {
+					test.fail('Timed out after ' + seconds + ' seconds');
+					return;
+				}
+			}, 10);
+		});
+	});
+
+	after("Everything shut down.", function () {
+		bob.run(function () {
+			process.exit();
+		});
+		return require('./util/open').cleanup();
+	});
 });
