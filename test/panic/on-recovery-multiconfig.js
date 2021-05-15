@@ -7,6 +7,7 @@
 // Important: It turns out that it's very important that both browsers tabs be
 // visible/active throughout the tests, because an inactive tab will NOT
 // reconnect to the relay peer until the tab is active again. (Chrome 83)
+// TODO ^^based on the above note, running these tests with headless: false reveals both tabs are in the same window, and may not both be visible
 
 // FIXME mocha considers these configurations to be a single test, while ideally it would be considered variants of a suite
 // based on https://stackoverflow.com/a/39286581/13564512
@@ -29,7 +30,7 @@ var clientConfigLibs = {
 		'store.js',
 		'rindexed.js'
 	]
-}; // TODO load these before constructing browser gun isntances
+};
 
 
 var config = {
@@ -129,6 +130,7 @@ describe("gun.on should receive updates after crashed relay peer comes back onli
 				var loadPromises = [];
 				browsers.each(function (client) {
 					loadPromises.push(client.run(function (test) {
+						test.async();
 						// console.log(window.location.href);
 						function load(src, cb) {
 							var script = document.createElement('script');
@@ -140,17 +142,20 @@ describe("gun.on should receive updates after crashed relay peer comes back onli
 								cb();
 								return;
 							}
-							var cur = src.unshift();
+							var cur = src.shift();
 							load(cur, () => {
 								loadAll(src, cb);
 							});
 						}
 
-						if (window.location.href.includes('#libs=')) {
+						if (window.location.href.includes('#libs=')) { // TODO? replace URL args with "official" way to send/receive config data
 							var libs = window.location.href.split('#libs=')[1].split(',');
 							loadAll(libs, () => {
+								console.log('loaded', libs);
 								test.done();
 							});
+						} else {
+							test.done();
 						}
 					}));
 				});
