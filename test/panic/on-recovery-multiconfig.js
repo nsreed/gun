@@ -12,9 +12,9 @@
 // based on https://stackoverflow.com/a/39286581/13564512
 // karma may be a better choice in terms of capabilities, but trying to stay withing the existing dependencies
 
-// var clientConfigs = ['default', 'radisk']; // TODO these were the original test categories, restore them after diagnosing failure rate
+var clientConfigs = ['default', 'radisk']; // TODO these were the original test categories, restore them after diagnosing failure rate
 /** the browser configuration categories to run this test suit against */
-var clientConfigs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // TODO these are FAKE test categories, meant for testing multiple runs of the default browser configuration
+// var clientConfigs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // TODO these are FAKE test categories, meant for testing multiple runs of the default browser configuration
 /** Gun constructor options to provide when including these libraries */
 var clientConfigOpts = {
 	radisk: {
@@ -72,8 +72,8 @@ var lc = "default";
 
 describe("gun.on should receive updates after crashed relay peer comes back online", function () {
 	this.timeout(10 * 1000);
-	clientConfigs.forEach(function (browserConfigName) {
-		describe(`with ${browserConfigName} plugin configuration`, function () {
+	clientConfigs.forEach(function (clientConfig) {
+		describe(`with ${clientConfig} plugin configuration`, function () {
 			before('PANIC manager setup servers', function () {
 
 				// TODO? this is here since we are terminating the gun servers after each configuration, so we need to start them up again before each configuration
@@ -91,10 +91,7 @@ describe("gun.on should receive updates after crashed relay peer comes back onli
 			before("Servers have joined!", function () {
 				return servers.atLeast(config.servers);
 			});
-			it("Waited 1 second", function (done) {
-				// require('./util/open').cleanup(); // Try to close any existing clients from earlier crashed tests
-				setTimeout(done, 1000);
-			});
+
 			it("GUN started!", function () {
 				return bob.run(function (test) {
 					var env = test.props;
@@ -115,20 +112,46 @@ describe("gun.on should receive updates after crashed relay peer comes back onli
 			});
 
 			it(config.browsers + " browser(s) have joined!", function () {
-				require('./util/open').web(config.browsers, "http://" + config.IP + ":" + config.port);
+				// Pass the libraries to include as a # url argument
+				var libs = [];
+				if (Array.isArray(clientConfigLibs[clientConfig])) {
+					libs = clientConfigLibs[clientConfig];
+				}
+				var libsArg = libs.length == 0 ? '' : '#libs=' + libs.join(',');
+
+				require('./util/open').web(config.browsers, "http://" + config.IP + ":" + config.port + '/' + libsArg, {
+					headless: true,
+				});
 				return browsers.atLeast(config.browsers);
 			});
 
-			it(`browsers loaded ${browserConfigName} plugin config`, function () {
+			it(`browsers loaded ${clientConfig} plugin config`, function () {
 				var loadPromises = [];
 				browsers.each(function (client) {
 					loadPromises.push(client.run(function (test) {
+						// console.log(window.location.href);
 						function load(src, cb) {
 							var script = document.createElement('script');
 							script.onload = cb; script.src = src;
 							document.head.appendChild(script);
 						}
-						// TODO load configuration libraries here
+						function loadAll(src, cb) {
+							if (src.length === 0) {
+								cb();
+								return;
+							}
+							var cur = src.unshift();
+							load(cur, () => {
+								loadAll(src, cb);
+							});
+						}
+
+						if (window.location.href.includes('#libs=')) {
+							var libs = window.location.href.split('#libs=')[1].split(',');
+							loadAll(libs, () => {
+								test.done();
+							});
+						}
 					}));
 				});
 				return Promise.all(loadPromises);
@@ -291,13 +314,4 @@ describe("gun.on should receive updates after crashed relay peer comes back onli
 			});
 		});
 	});
-	// after('closing servers', function () {
-	// 	bob.run(function () {
-	// 		process.exit();
-	// 	});
-	// 	carl.run(function () {
-	// 		process.exit();
-	// 	});
-	// 	return require('./util/open').cleanup();
-	// });
 });
