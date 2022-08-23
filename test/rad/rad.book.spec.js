@@ -10,7 +10,25 @@ const expect = require('../expect');
 const path = require('path');
 const fs = require('fs');
 
-const ENABLE_GUN_LOGGING = false;
+const ENABLE_GUN_LOGGING = process.env.ENABLE_GUN_LOGGING ?? false;
+const SKIP_CHARS = process.env.SKIP_CHARS ?? false;
+const CHAR_MAX = 330;
+const UNPRINTABLE_MAX = 128; //65536;
+const JS_NUMBER_MAX = 9007199254740991;
+const JS_NUMBER_MAX_PLUS_ONE = BigInt(JS_NUMBER_MAX) + BigInt(1);
+
+
+const DATA_LENGTHS = [
+  // 100,
+  // 1000, // 1kb
+  // 3000, // 3kb
+  // 10000,
+  100000,
+  1000000, // 1 mb
+  10000000, // 10mb
+  50000000, // 50mb
+  // 500000000, // 500mb
+];
 
 const PATH_TO_TEST_FOLDER = path.resolve(__dirname, 'booktestdata');
 const PATH_TO_OLD_DB = path.resolve(PATH_TO_TEST_FOLDER, 'oldradata');
@@ -25,19 +43,26 @@ fs.rmdirSync(PATH_TO_TEST_DB, { recursive: true });
 const BOOK_SPECIAL_CHARS = ['\'|', '|\'', '|', '\'', '\n'];
 const BOOK_PAGE_SIZE = 3000;
 
+const PATH_SEGMENTS = ['a', 'b'];
 const RAD_PATH_SEPARATORS = ['/', '.'];
 const GUN_PRIMITIVES = [
   null,
   'string',
-  728858,
-  BigInt(1000000000000000000000000000000000000000000000000000000000n),
   true,
   false,
   -Infinity,
   Infinity,
   NaN,
-  -0
-]
+  -0, // FIXME javascript doesn't serialize this, fix manually with https://stackoverflow.com/questions/7223717/differentiating-0-and-0
+  0,
+  1,
+  -1,
+  1.0,
+  -1.0,
+  JS_NUMBER_MAX,
+  JS_NUMBER_MAX + 1,
+  JS_NUMBER_MAX_PLUS_ONE
+]; // TODO? Are these all the primitives you got?
 
 
 var root;
@@ -61,6 +86,13 @@ var RFS;
     try { require('../../lib/fsrm')(PATH_TO_TEST_DB) } catch (e) { }
     root.Gun = require('../../gun');
     root.Gun.TESTING = true;
+    Gun = root.Gun;
+    require("../../lib/book");
+    Radix = Gun?.window?.Radix || require("../../lib/radix");
+    Radisk = Gun?.window?.Radisk || require("../../lib/radisk3");
+    RFS = require('../../lib/rfs');
+    require('../../lib/store');
+    require('../../lib/rindexed');
   }
 
   try { var expect = global.expect = require("../expect") } catch (e) { }
@@ -68,34 +100,11 @@ var RFS;
   if (!root.Gun.SEA) {
     require('../../sea.js');
   }
-}(this));
+}(this, 'test'));
 
-Gun = root.Gun;
-require("../../lib/book");
-Radix = Gun?.window?.Radix || require("../../lib/radix");
-Radisk = Gun?.window?.Radisk || require("../../lib/radisk3");
-RFS = require('../../lib/rfs');
-require('../../lib/store');
-require('../../lib/rindexed');
 
 const RE_UNPRINTABLE = /[^\x20-\x7E]/;
 const RE_APOSTROPHES = /'/g;
-
-const SKIP_CHARS = false;
-const CHAR_MAX = 330;
-const UNPRINTABLE_MAX = 128; //65536;
-
-const DATA_LENGTHS = [
-  // 100,
-  // 1000, // 1kb
-  // 3000, // 3kb
-  // 10000,
-  100000,
-  1000000, // 1 mb
-  10000000, // 10mb
-  50000000, // 50mb
-  500000000, // 500mb
-];
 const LONG_DATAS = DATA_LENGTHS.map(l => ''.padEnd(l, '012345'));
 
 const ALL_CHARS = [];
@@ -105,7 +114,7 @@ for (let i = 0; i < CHAR_MAX; i++) {
 ALL_CHARS.push('\u001b');
 const PRINTABLE_CHARS = ALL_CHARS.filter(c => !RE_UNPRINTABLE.test(c));
 const UNPRINTABLE_CHARS = ALL_CHARS.filter(c => RE_UNPRINTABLE.test(c)).slice(0, UNPRINTABLE_MAX);
-const ESCAPE_CHARS = [`\0`, `\u001b`, `\\`, `\\\\`, `\\\\\\`, `\\\\\\\\`];
+const ESCAPE_CHARS = [`\0`, `\u001b`, `\\`, `\\\\`, `\\\\\\`, `\\\\\\\\`, '$`']; // TODO? Ask mark about the one known bad character that messed with replace()
 const NORMAL_CHARS = ['A', 'B', 'C'];
 
 const ESCAPE_FACTORIES = {
@@ -124,15 +133,14 @@ const ESCAPE_FACTORIES = {
 function buildSoul(separator, ...args) {
   return args.join(separator);
 }
-
+const ESCAPED_SPECIALS = BOOK_SPECIAL_CHARS.reduce((pe, cs) => [...pe, ESCAPE_CHARS.map(ec => `${ec}${cs}`)], []);
 const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
-  .reduce((pc, ps) => [...pc,
-  ...[...BOOK_SPECIAL_CHARS, ...ESCAPE_CHARS].reduce((pb, cb) =>
+  .reduce((pc, ps) => [...pc, ...[...BOOK_SPECIAL_CHARS, ...ESCAPE_CHARS, ...ESCAPED_SPECIALS].reduce((pb, cb) =>
     [...pb,
     NORMAL_CHARS.map((nc) => `${nc}${cb}`),
     NORMAL_CHARS.map((nc) => `${cb}${nc}`),
     NORMAL_CHARS.map((nc) => `${cb}${cb}${nc}`),
-    ], [])], []);
+    ], []).map(s => s.join(ps))], []);
 // console.log(SOUL_GAUNTLET);
 // const SOUL_GAUNTLET = [RAD_PATH_SEPARATORS, [PRINTABLE_CHARS], ESCAPE_FACTORIES, [BOOK_SPECIAL_CHARS, ESCAPE_CHARS]];
 // [\x000/9.2%20b, ...]
@@ -143,11 +151,10 @@ const opt = {
   localStorage: false,
   log: (msg, ...args) => {
     if (ENABLE_GUN_LOGGING) {
-
       console.log(`  ${msg}`, ...args);
     }
   },
-  chunk: 250
+  chunk: 1000
 };
 opt.store = RFS(opt);
 
@@ -165,54 +172,144 @@ describe('radisk3 & book', () => {
   it('can read older file versions', done => {
     done('not implemented');
   });
+
   it('creates a ! file', (done) => {
     expect(testDirExists()).to.be.ok();
     done('not implemented');
   });
-  it('loads a ! file if one exists', done => {
-    // done();
-    const r2 = buildRad(opt);
-    // hmm
-    done('not implemented');
+
+  it('loads a ! file if one exists', (done) => {
+    r('something defined', 'defined', () => {
+      expect(fs.existsSync(PATH_TO_TEST_DB)).to.be.ok();
+      const r2 = buildRad(opt);
+      // TODO? mark - is there a way to force rad to write to disk?
+      r2('something undefined', (err, page, book) => {
+        expect(getValueFromPage('something defined', page)).to.eql('defined');
+        done(); // FIXME this never fires, r.book.all is empty but r.book.list isn't
+      });
+    });
+    // r2('something undefined', (err, page, book) => {
+    //   expect(getValueFromPage('something defined', page)).to.eql('defined');
+    //   done();
+    // });
   });
 
   describe('path', () => {
+    beforeEach(() => {
+      r = buildRad(opt);
+    })
     it('supports arbitrarily long souls', done => {
-      done('not implemented');
+      // TODO? Ask mark about path hashing, should it be expected to be a thing with book, because book incurs conversion cost anyway
+      const longsoul = ''.padEnd(BOOK_PAGE_SIZE, 'soul');
+      r(longsoul, 'value', () => {
+        r2 = buildRad(opt);
+        r2(longsoul, (err, page, book) => {
+          const value = getValueFromPage(longsoul, page);
+          expect(value).to.eql('value');
+          done();
+        });
+      });
+      // done('not implemented');
     });
-    it('uses path delimiters interchangeably', done => {
-      done('not implemented');
+    RAD_PATH_SEPARATORS.forEach(s => {
+      it(`supports '${s}' as a separator`, done => {
+        const soul = PATH_SEGMENTS.join(s);
+        r(soul, soul);
+        r(soul, (err, page, book) => {
+          expect(getValueFromPage(soul, page)).to.eql(soul);
+          done();
+        })
+
+      });
     });
-    it('supports souls containing special characters', done => {
-      done('not implemented');
+    describe('special characters in path', () => {
+      beforeEach(() => {
+        r = buildRad(opt);
+      })
+      SOUL_GAUNTLET.forEach((soul, si) => {
+        it(`#:${si + 1} of ${SOUL_GAUNTLET.length}`, done => {
+          r(soul, soul);
+
+          r(soul, (err, page, book) => {
+            expect(getValueFromPage(soul, page)).to.eql(soul);
+            done();
+          })
+        });
+      });
     });
   });
 
   describe('data', () => {
+
+    beforeEach(() => {
+      r = buildRad(opt);
+    });
     it('can write & read data spanning multiple pages', done => {
       done('not implemented');
     });
-    it('can write & read all primitives', done => {
-      done('not implemented');
+    describe('stores all primitives', () => {
+      beforeEach(() => {
+        r = buildRad(opt);
+      });
+      GUN_PRIMITIVES.forEach(value => it(`correctly stores ${typeof value} (${value})`, done => {
+        const name = `type ${typeof v} value ${value}`;
+        r(name, value);
+        r(name, (err, page, book) => {
+          const result = getValueFromPage(name, page);
+          expect(result).to.eql(value);
+          done();
+        });
+      }));
+      it('should store numbers larger than 9007199254740992 as BigInt?', (done) => {
+        // TODO? mark - does this make sense? it could cause peers running on different JS engines architectures to give different results
+        // If so, this might be a case to run with PANIC as well
+        done('indeterminate');
+      });
     });
     it('can write & read objects', done => {
-      done('not implemented');
-    })
+      r('object', { test: 'works' });
+      r('object', (err, page, book) => {
+        const value = getValueFromPage('object', page);
+        expect(value).to.be.ok();
+        expect(value.test).to.eql('works');
+        done();
+      })
+    });
+    // it('might be able to page where soul length exceeds max page size', done => {
+    //   done();
+    // });
+    // it('can page with special characters at beginning and end of page', done => {
+    //   // generate a thing that is as big as a 
+    //   const bigthing = ''.padEnd(BOOK_PAGE_SIZE, '12345');
+    //   r('bigkey', bigthing, () => {
+    //     done();
+    //   });
+    // });
   })
 });
 
 const soulpermutations = [];
+const timer = (name = 'default') => {
+  const start = Date.now();
+  return (stop = true) => {
+    console.log('%s took %dms', name, Date.now() - start);
+  };
+}
+
 describe('RAD book', () => {
   let r;
+  let t;
 
+  // return;
   describe('node content length & paging', () => {
     beforeEach(() => {
       r = buildRad(opt);
-    })
+    });
     LONG_DATAS.forEach((d) => {
       it(`handles data length of ${d.length} bytes`, (done) => {
         seq++;
         const dk = `root.seq${seq}`;
+        t = timer(dk);
         console.log(`\n#[${dk}]\n`);
         r(dk, d, (err, ok) => {
           if (err) {
@@ -220,8 +317,9 @@ describe('RAD book', () => {
             done(false);
           }
         });
-        console.time('test');
+        // console.time('test');
         r(dk, (err, res, o) => {
+          t();
           const value = getValueFromPage(dk, res);
           if (!res) {
             console.log('no result', { err, res, o });
@@ -236,12 +334,11 @@ describe('RAD book', () => {
           }
           done();
         });
-        console.timeEnd('test');
+        // console.timeEnd('test');
       });
     });
   });
 
-  const pathSegments = ['a', 'b'];
   if (!SKIP_CHARS) {
     RAD_PATH_SEPARATORS.forEach((d, di) => {
       describe(`\`${d}\`-delimited paths`, () => {
@@ -278,9 +375,9 @@ describe('RAD book', () => {
                 });
 
                 PATH_CHARS.forEach((c, i) => {
-                  for (let si = 0; si <= pathSegments.length; si++) {
-                    const before = pathSegments.slice(0, si);
-                    const after = pathSegments.slice(si);
+                  for (let si = 0; si <= PATH_SEGMENTS.length; si++) {
+                    const before = PATH_SEGMENTS.slice(0, si);
+                    const after = PATH_SEGMENTS.slice(si);
                     const variant = [...ESCAPE_FACTORIES[escapeVariantKey](before, ec, c, after)];
                     variant[0] = `${variant[0]}${seq}`;
                     const rootKey = `${path[0]}${seq}`;
@@ -290,20 +387,34 @@ describe('RAD book', () => {
 
                     const numericSoul = soul.split('').map(x => `${x.charCodeAt(0)}`.padStart(6, ' ')).join('');
 
-                    it(`${seq} ${numericSoul} # (${soul}) => ${data}`, (done) => {
+                    it(`book ${seq} ${numericSoul} # (${soul}) => ${data}`, (done) => {
                       seq++;
                       r(soul, data);
-
                       r(soul, (err, res, book) => {
                         if (err) {
                           done(err);
                           return;
                         }
-
                         const value = book(soul); // getValueFromPage(soul, res); // TODO mark fix this
-
                         if (value !== data) {
-                          debugger;
+                          console.log(`values didn't match`);
+                        }
+                        expect(value).to.eql(data);
+                        done();
+                      });
+                    });
+
+                    it(`manual ${seq} ${numericSoul} # (${soul}) => ${data}`, (done) => {
+                      seq++;
+                      r(soul, data);
+                      r(soul, (err, page, book) => {
+                        if (err) {
+                          done(err);
+                          return;
+                        }
+                        const value = getValueFromPage(soul, page); // getValueFromPage(soul, res); // TODO mark fix this
+                        if (value !== data) {
+                          console.log(`values didn't match`);
                         }
                         expect(value).to.eql(data);
                         done();
@@ -318,7 +429,6 @@ describe('RAD book', () => {
       });
     });
   }
-  console.log(soulpermutations);
 });
 
 function getValueFromPage(soul, res) {
