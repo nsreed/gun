@@ -46,26 +46,6 @@ const BOOK_PAGE_SIZE = 3000;
 
 const PATH_SEGMENTS = ['a', 'b'];
 const RAD_PATH_SEPARATORS = ['/', '.'];
-const GUN_PRIMITIVES = [
-  null,
-  '',
-  'string',
-  true,
-  false,
-  -Infinity,
-  Infinity,
-  NaN,
-  -0, // FIXME javascript doesn't serialize this, fix manually with https://stackoverflow.com/questions/7223717/differentiating-0-and-0
-  0,
-  1,
-  -1,
-  1.0,
-  -1.0,
-  JS_NUMBER_MAX,
-  JS_NUMBER_MAX + 1,
-  JS_NUMBER_MAX_PLUS_ONE
-]; // TODO? Are these all the primitives you got?
-
 
 
 
@@ -144,7 +124,6 @@ const OPT_DEFAULTS = {
   }
 
   let seq = 0;
-  let opt;
 
   describe('radisk3 & book', () => {
     console.log('starting!!!!!!!!!');
@@ -395,27 +374,79 @@ const OPT_DEFAULTS = {
     });
 
     describe('data', () => {
-      return;
+
       beforeEach(() => {
         r = buildRad();
       });
       it('can write & read data spanning multiple pages', done => {
         done('not implemented');
       });
-      describe('stores all primitives', () => {
-        beforeEach(() => {
-          r = buildRad();
+      describe('primitives', () => {
+
+        const GUN_PRIMITIVES = [
+          null,
+          // {},
+          // { key: 'value' },
+          // { object: { key: 'value' } },
+          '',
+          'string',
+          true,
+          false,
+          -Infinity,
+          Infinity,
+          NaN,
+          -0, // FIXME javascript doesn't serialize this, fix manually with https://stackoverflow.com/questions/7223717/differentiating-0-and-0
+          0,
+          1,
+          -1,
+          1.0,
+          -1.0,
+          JS_NUMBER_MAX,
+          JS_NUMBER_MAX + 1,
+          JS_NUMBER_MAX_PLUS_ONE
+        ]; // TODO? Are these all the primitives you got?
+
+
+        GUN_PRIMITIVES.forEach(value => {
+          describe(`${typeof value} (${value})`, () => {
+            before(() => {
+              unpersist();
+              r = buildRad();
+            });
+            const name = `type ${typeof value} value ${value}`;
+            it(`writes ${typeof value} (${value})`, done => {
+              r(name, value, () => {
+                r(name, (err, page, book) => {
+                  const result = book(name);
+                  expect(typeof result).to.eql(typeof value);
+                  if (typeof value !== 'bigint' && isNaN(value)) {
+                    expect(isNaN(result)).to.eql(true);
+                  } else {
+                    expect(result === value).to.eql(true);
+                    expect(result).to.eql(value);
+                  }
+                  done();
+                });
+              });
+            });
+
+            it(`reads ${typeof value} (${value})`, done => {
+              r(name, (err, page, book) => {
+                const result = book(name);
+                expect(typeof result).to.eql(typeof value);
+                if (typeof value !== 'bigint' && isNaN(value)) {
+                  expect(result === value).to.eql(true);
+                  expect(isNaN(result)).to.eql(true);
+                } else {
+                  expect(result).to.eql(value);
+                }
+                done();
+              });
+            });
+          })
+
         });
-        GUN_PRIMITIVES.forEach(value => it(`correctly stores ${typeof value} (${value})`, done => {
-          const name = `type ${typeof v} value ${value}`;
-          r(name, value);
-          r(name, (err, page, book) => {
-            const result = getValueFromPage(name, page);
-            expect(result).to.eql(value);
-            done();
-          });
-        }));
-        it('should store numbers larger than 9007199254740992 as BigInt?', (done) => {
+        it.skip('should store numbers larger than 9007199254740992 as BigInt?', (done) => {
           // TODO? mark - does this make sense? it could cause peers running on different JS engines architectures to give different results
           // If so, this might be a case to run with PANIC as well
           done('indeterminate');
