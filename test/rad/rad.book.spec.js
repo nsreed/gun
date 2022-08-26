@@ -12,6 +12,7 @@ const fs = require('fs');
 
 const ENABLE_GUN_LOGGING = process.env.ENABLE_GUN_LOGGING ?? false;
 const SKIP_CHARS = process.env.SKIP_CHARS ?? false;
+const KEEP_DATA = process.env.KEEP_DATA ?? true;
 const CHAR_MAX = 330;
 const UNPRINTABLE_MAX = 128; //65536;
 const JS_NUMBER_MAX = 9007199254740991;
@@ -101,12 +102,18 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
     NORMAL_CHARS.map((nc) => `${cb}${cb}${nc}`),
     ], []).map(s => s.join(ps))], []);
 
+const OPT_DEFAULTS = {
+  file: PATH_TO_TEST_DB,
+  localStorage: false,
+  chunk: 1000
+};
 (function () {
   var root;
   var Gun;
   var Radix;
   var Radisk;
   var RFS;
+  var Store;
   var env;
   if (typeof global !== 'undefined') { env = global }
   if (typeof window !== 'undefined') { env = window }
@@ -148,106 +155,133 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
         fs.mkdirSync(PATH_TO_TEST_FOLDER);
       }
       unpersist();
-      opt = {
-        file: PATH_TO_TEST_DB,
-        localStorage: false,
-        log: (msg, ...args) => {
-          if (ENABLE_GUN_LOGGING) {
-            console.log(`  ${msg}`, ...args);
-          }
-        },
-        chunk: 1000
-      };
-      opt.store = RFS(opt);
       done();
     });
 
     after(() => {
-      // unpersist();
+      if (!KEEP_DATA) {
+        unpersist();
+      }
     });
 
-    // after(done => {
-    //   fs.rmdirSync(PATH_TO_TEST_DB, { recursive: true });
-    //   done();
-    // });
-
-    beforeEach(() => {
-      // unpersist(opt);
-      // expect(testDirExists()).to.be.false();
-      r = buildRad(opt);
+    describe.skip('backwards compatibility', () => {
+      it('can read older file versions', done => {
+        done('not implemented');
+      });
     });
 
-    it('can read older file versions', done => {
-      done('not implemented');
-    });
-
-    it('creates a ! file', (done) => {
-      expect(testDirExists()).to.be.ok();
-      done('not implemented');
-    });
-
-    it('loads a ! file if one exists', (done) => {
-      r('something defined', 'defined', () => {
-        expect(fs.existsSync(PATH_TO_TEST_DB)).to.be.ok();
-        const r2 = buildRad(opt);
-        // TODO? mark - is there a way to force rad to write to disk?
-        r2('something defined', (err, page, book) => {
-          expect(getValueFromPage('something defined', page)).to.eql('defined');
-          done(); // FIXME this never fires, r.book.all is empty but r.book.list isn't
+    it('no callback for read', done => {
+      r = buildRad();
+      r('initialize', true, () => {
+        r('initialize');
+        r('test', '2', () => {
+          r('test');
         });
       });
-      // r2('something undefined', (err, page, book) => {
-      //   expect(getValueFromPage('something defined', page)).to.eql('defined');
-      //   done();
-      // });
-    });
+      // r('initialize');
+      done();
+    })
 
     describe('path', () => {
-      beforeEach((done) => {
-        r = buildRad(opt);
-        // r('initialize', done);
-        done();
+      describe('overwrite', () => {
+        before((done) => {
+          unpersist();
+          r = buildRad();
+          done();
+        });
+        it('writes initial value', done => {
+          r('initial', 'value', done);
+        });
+        it('reads initial value', done => {
+          r('initial', (err, page, book) => {
+            expect(err).to.not.be.ok();
+            expect(page).to.be.ok();
+            expect(book).to.be.ok();
+            expect(book('initial')).to.eql('value');
+            done();
+          })
+        });
+        it('overwrites initial value', done => {
+          r('initial', 'new value', done);
+        });
+        it('reads new value', done => {
+          r('initial', (err, page, book) => {
+            expect(err).to.not.be.ok();
+            expect(page).to.be.ok();
+            expect(book).to.be.ok();
+            expect(book('initial')).to.eql('new value');
+            done();
+          })
+        })
+      });
+      [true, false].forEach(reset => {
+        [false, true].forEach(readonly => {
+          describe(`consecutive ${readonly ? 'read' : 'write+read'} using ${reset ? 'new' : 'existing'} Radisk`, () => {
+            if (!reset && !readonly) {
+              before(() => unpersist());
+            }
+            (reset ? beforeEach : before)(() => {
+              r = buildRad();
+            });
+            if (!readonly) {
+              it('writes a', done => {
+                r('a', 'a', () => {
+                  r('a', done);
+                })
+              });
+              it('writes b', done => {
+                r('b', 'b', () => {
+                  r('b', (err, page, book) => {
+                    done();
+                  });
+                })
+              });
+            }
+            it('reads a', done => {
+              r('a', (err, page, book) => {
+                expect(book('a')).to.eql('a');
+                done();
+              })
+            });
+            it('reads b (using test wrapper)', done => {
+              r('b', (err, page, book) => {
+                const v = getValueFromPage('b', page);
+                if (v !== 'b') {
+                  done('values did not match');
+                  return;
+                }
+                done();
+              })
+            });
+            it('reads b (using book())', done => {
+              r('b', (err, page, book) => {
+                const v = book('b', page);
+                if (v !== 'b') {
+                  done('values did not match');
+                  return;
+                }
+                done();
+              })
+            });
+          })
+        })
       });
 
-      describe('simple', () => {
-        it('writes a', done => {
-          r('a', 'a', () => {
-            r('a', done);
-          })
-        });
-        it('reads a', done => {
-          r('a', (err, page, book) => {
-            expect(book('a')).to.eql('a');
-            done();
-          })
-        });
-        it('writes b', done => {
-          r('b', 'b', () => {
-            r('b', done);
-          })
-        });
-        it('reads b', done => {
-          r('b', (err, page, book) => {
-            const v = book('b');
-            if (v !== 'b') {
-              done('values did not match');
-              return;
-            }
-            done();
-          })
-        });
-      })
-
       describe('lengths', function () {
-        [1000, 1000000].forEach(dataLength => {
-          [127, 255, BOOK_PAGE_SIZE - 10, BOOK_PAGE_SIZE, FS_PATH_MAX_LENGTH + FS_NAME_MAX_LENGTH + 2, FS_PATH_MAX_LENGTH * 10].reverse().forEach(pathLength => {
+        before((done) => {
+          unpersist();
+          r = buildRad();
+          r('init', done);
+        });
+        [1000, 10000000].forEach(dataLength => {
+          [127, 255, BOOK_PAGE_SIZE - 10, BOOK_PAGE_SIZE, FS_PATH_MAX_LENGTH + FS_NAME_MAX_LENGTH + 2, FS_PATH_MAX_LENGTH * 10].forEach(pathLength => {
             // TODO? Ask mark about path hashing, should it be expected to be a thing with book, because book incurs conversion cost anyway
             const word = ''.padEnd(pathLength, `${pathLength}`);
             const value = ''.padEnd(dataLength, `${pathLength}value`);
             it(`writes path length ${pathLength} with data length ${dataLength}`, done => {
               r(word, value, (...args) => {
                 // console.log({ args });
-                // r2 = buildRad(opt);
+                // r2 = buildRad();
                 r(word, (err, page, book) => {
                   const value = book(word);
                   expect(value).to.eql(value);
@@ -270,6 +304,9 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
         });
 
         describe('longer than 255 (truncated)', () => {
+          before(() => {
+            r = buildRad();
+          })
           const pathLength = 255;
           const dataLength = 1000000;
           const word = ''.padEnd(pathLength, `${pathLength}`) + 'a';
@@ -283,16 +320,21 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
           });
           it('reads', done => {
             r(word, (err, page, book) => {
-              expect(book(word)).to.eql(value);
+              const got = book(word);
+              expect(got).to.be.ok();
+              if (got !== value) {
+                done('values did not match');
+                return;
+              }
               done();
             })
           });
-          it('writes distinct path past after', done => {
+          it('writes distinct path past 255', done => {
             r(word2, value2, () => {
               r(word2, done);
             })
           });
-          it('reads distinct path past after', done => {
+          it('reads distinct path past 255', done => {
             r(word2, (err, page, book) => {
               const v = book(word2);
               if (v !== value2) {
@@ -305,33 +347,39 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
         });
       });
 
-      RAD_PATH_SEPARATORS.forEach(s => {
-        it(`supports '${s}' as a separator`, done => {
-          const soul = PATH_SEGMENTS.join(s);
-          r(soul, soul);
-          r(soul, (err, page, book) => {
-            expect(getValueFromPage(soul, page)).to.eql(soul);
-            done();
+      describe('separators', () => {
+        beforeEach(() => {
+          unpersist();
+          r = buildRad();
+        })
+        RAD_PATH_SEPARATORS.forEach(s => {
+          it(`supports '${s}' as a separator`, done => {
+            const soul = PATH_SEGMENTS.join(s);
+            r(soul, soul);
+            r(soul, (err, page, book) => {
+              expect(getValueFromPage(soul, page)).to.eql(soul);
+              done();
+            });
+          });
+          it('should separate two keys', (done) => {
+            seq++;
+            let soul = `a${seq}${s}a`;
+            let data = `data for '${soul}' ${seq}`;
+            r(soul, data);
+            r(soul, (err, res, o) => {
+              const rd = getValueFromPage(soul, res);
+              expect(rd).to.be.ok();
+              expect(rd).to.eql(data);
+              done();
+            });
           });
         });
-        it('should separate two keys', (done) => {
-          seq++;
-          let soul = `a${seq}${s}a`;
-          let data = `data for '${soul}' ${seq}`;
-          r(soul, data);
-          r(soul, (err, res, o) => {
-            const rd = getValueFromPage(soul, res);
-            expect(rd).to.be.ok();
-            expect(rd).to.eql(data);
-            done();
-          });
-        });
-      });
+      })
 
       return;
       describe('special characters in path', () => {
         beforeEach(() => {
-          r = buildRad(opt);
+          r = buildRad();
         });
         SOUL_GAUNTLET.forEach((soul, si) => {
           it(`#:${si + 1} of ${SOUL_GAUNTLET.length}`, done => {
@@ -349,14 +397,14 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
     describe('data', () => {
       return;
       beforeEach(() => {
-        r = buildRad(opt);
+        r = buildRad();
       });
       it('can write & read data spanning multiple pages', done => {
         done('not implemented');
       });
       describe('stores all primitives', () => {
         beforeEach(() => {
-          r = buildRad(opt);
+          r = buildRad();
         });
         GUN_PRIMITIVES.forEach(value => it(`correctly stores ${typeof value} (${value})`, done => {
           const name = `type ${typeof v} value ${value}`;
@@ -402,7 +450,7 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
       const LONG_DATAS = DATA_LENGTHS.map(l => ''.padEnd(l, `${l}B `));
       describe('node content length & paging', () => {
         beforeEach((done) => {
-          r = buildRad(opt);
+          r = buildRad();
           r('initialize', () => {
             r = timeRad(r);
             done();
@@ -467,7 +515,7 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
                     let rootKey;
 
                     beforeEach(() => {
-                      r = buildRad(opt);
+                      r = buildRad();
                     });
 
                     PATH_CHARS.forEach((c, i) => {
@@ -535,6 +583,7 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
   function unpersist(opt) {
     opt = opt || { file: PATH_TO_TEST_DB };
     opt.file = opt.file || PATH_TO_TEST_DB;
+    delete RFS[opt.file];
     fs.rmdirSync(opt.file, { recursive: true });
   }
 
@@ -558,8 +607,24 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
     return rTimingWrapper;
   }
 
-  function buildRad(opt) {
-    return Radisk(opt);
+  function buildOpt(overrides) {
+    overrides = overrides || {};
+    const opt = {
+      ...OPT_DEFAULTS, ...overrides
+    };
+    opt.log = (msg, ...args) => {
+      if (ENABLE_GUN_LOGGING) {
+        console.log(`  ${msg}`, ...args);
+      }
+    };
+    delete RFS[opt.file];
+    opt.store = RFS(opt);
+    return opt;
+  }
+
+  function buildRad(overrides = {}) {
+    const opts = buildOpt(overrides);
+    return Radisk(opts);
   }
 
 
