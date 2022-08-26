@@ -17,6 +17,9 @@ const UNPRINTABLE_MAX = 128; //65536;
 const JS_NUMBER_MAX = 9007199254740991;
 const JS_NUMBER_MAX_PLUS_ONE = BigInt(JS_NUMBER_MAX) + BigInt(1);
 
+const FS_PATH_MAX_LENGTH = 4096;
+const FS_NAME_MAX_LENGTH = 255;
+
 
 const DATA_LENGTHS = [
   10,
@@ -159,6 +162,10 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
       done();
     });
 
+    after(() => {
+      // unpersist();
+    });
+
     // after(done => {
     //   fs.rmdirSync(PATH_TO_TEST_DB, { recursive: true });
     //   done();
@@ -184,7 +191,7 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
         expect(fs.existsSync(PATH_TO_TEST_DB)).to.be.ok();
         const r2 = buildRad(opt);
         // TODO? mark - is there a way to force rad to write to disk?
-        r2('something undefined', (err, page, book) => {
+        r2('something defined', (err, page, book) => {
           expect(getValueFromPage('something defined', page)).to.eql('defined');
           done(); // FIXME this never fires, r.book.all is empty but r.book.list isn't
         });
@@ -196,20 +203,108 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
     });
 
     describe('path', () => {
-      return;
-      it('supports arbitrarily long souls', done => {
-        // TODO? Ask mark about path hashing, should it be expected to be a thing with book, because book incurs conversion cost anyway
-        const longsoul = ''.padEnd(BOOK_PAGE_SIZE, 'soul');
-        r(longsoul, 'value', () => {
-          r2 = buildRad(opt);
-          r2(longsoul, (err, page, book) => {
-            const value = getValueFromPage(longsoul, page);
-            expect(value).to.eql('value');
+      beforeEach((done) => {
+        r = buildRad(opt);
+        // r('initialize', done);
+        done();
+      });
+
+      describe('simple', () => {
+        it('writes a', done => {
+          r('a', 'a', () => {
+            r('a', done);
+          })
+        });
+        it('reads a', done => {
+          r('a', (err, page, book) => {
+            expect(book('a')).to.eql('a');
             done();
+          })
+        });
+        it('writes b', done => {
+          r('b', 'b', () => {
+            r('b', done);
+          })
+        });
+        it('reads b', done => {
+          r('b', (err, page, book) => {
+            const v = book('b');
+            if (v !== 'b') {
+              done('values did not match');
+              return;
+            }
+            done();
+          })
+        });
+      })
+
+      describe('lengths', function () {
+        [1000, 1000000].forEach(dataLength => {
+          [127, 255, BOOK_PAGE_SIZE - 10, BOOK_PAGE_SIZE, FS_PATH_MAX_LENGTH + FS_NAME_MAX_LENGTH + 2, FS_PATH_MAX_LENGTH * 10].reverse().forEach(pathLength => {
+            // TODO? Ask mark about path hashing, should it be expected to be a thing with book, because book incurs conversion cost anyway
+            const word = ''.padEnd(pathLength, `${pathLength}`);
+            const value = ''.padEnd(dataLength, `${pathLength}value`);
+            it(`writes path length ${pathLength} with data length ${dataLength}`, done => {
+              r(word, value, (...args) => {
+                // console.log({ args });
+                // r2 = buildRad(opt);
+                r(word, (err, page, book) => {
+                  const value = book(word);
+                  expect(value).to.eql(value);
+                  done();
+                });
+              });
+              // done('not implemented');
+            });
+            it(`read path length ${pathLength} with data length ${dataLength}`, done => {
+              r(word, (err, page, book) => {
+                const value = book(word);
+                if (value !== value) {
+                  console.log('unexpected value');
+                }
+                expect(value).to.eql(value);
+                done();
+              });
+            });
           });
         });
-        // done('not implemented');
+
+        describe('longer than 255 (truncated)', () => {
+          const pathLength = 255;
+          const dataLength = 1000000;
+          const word = ''.padEnd(pathLength, `${pathLength}`) + 'a';
+          const word2 = ''.padEnd(pathLength, `${pathLength}`) + 'b';
+          const value = ''.padEnd(dataLength, `${pathLength}valuea`);
+          const value2 = ''.padEnd(dataLength, `${pathLength}valueb`);
+          it('writes', done => {
+            r(word, value, () => {
+              r(word, done);
+            })
+          });
+          it('reads', done => {
+            r(word, (err, page, book) => {
+              expect(book(word)).to.eql(value);
+              done();
+            })
+          });
+          it('writes distinct path past after', done => {
+            r(word2, value2, () => {
+              r(word2, done);
+            })
+          });
+          it('reads distinct path past after', done => {
+            r(word2, (err, page, book) => {
+              const v = book(word2);
+              if (v !== value2) {
+                done('values did not match');
+                return;
+              }
+              done();
+            })
+          });
+        });
       });
+
       RAD_PATH_SEPARATORS.forEach(s => {
         it(`supports '${s}' as a separator`, done => {
           const soul = PATH_SEGMENTS.join(s);
@@ -221,7 +316,7 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
         });
         it('should separate two keys', (done) => {
           seq++;
-          let soul = `a${seq}${d}a`;
+          let soul = `a${seq}${s}a`;
           let data = `data for '${soul}' ${seq}`;
           r(soul, data);
           r(soul, (err, res, o) => {
@@ -233,6 +328,7 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
         });
       });
 
+      return;
       describe('special characters in path', () => {
         beforeEach(() => {
           r = buildRad(opt);
@@ -301,46 +397,37 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
     const soulpermutations = [];
     describe('RAD book', () => {
       let r;
-      let t;
+      let writeTimer;
 
-      const LONG_DATAS = DATA_LENGTHS.map(l => ''.padEnd(l, '012345'));
+      const LONG_DATAS = DATA_LENGTHS.map(l => ''.padEnd(l, `${l}B `));
       describe('node content length & paging', () => {
         beforeEach((done) => {
           r = buildRad(opt);
-          r('?', done);
-          const ro = r;
-          function rp(...args) {
-            const cid = `${args[0]}${seq}`;
-            const rt = timer(cid);
-            const cbt = timer(cid + 'cb');
-            // console.log('call', args[0])
-            const ret = ro(...args.map((a, i) => 'function' === typeof a ? (...cba) => {
-              // console.log(`callback ${cid}`, i);
-              cbt();
-              a(...cba);
-            } : a));
-            rt();
-            return ret;
-          }
-          r = rp;
+          r('initialize', () => {
+            r = timeRad(r);
+            done();
+          });
           // console.log(r.book);
           // expect(r.book).to.be.ok();
           // done();
         });
         LONG_DATAS.forEach((d) => {
-          it(`handles data length of ${d.length} bytes`, (done) => {
+          const dk = `length.${d.length}B`;
+          it(`writes data length of ${d.length} bytes`, (done) => {
             seq++;
-            const dk = `root.seq${seq}.len${d.length}`;
-            t = timer(dk);
             // console.log(`\n#[${dk}]\n`);
+            // writeTimer = timer(`${d.length} bytes write`);
             r(dk, d, (err, ok) => {
               if (err) {
                 console.log('ERR! waiting for ${dk} to write', err);
                 done(false);
                 return;
               }
+              // writeTimer(true);
+              // const readTimer = timer(`${d.length} bytes read`)
               r(dk, (err, res, o) => {
-                t();
+                // readTimer(true);
+
                 const value = getValueFromPage(dk, res);
                 if (!res) {
                   // console.log('no result', { err, res, o });
@@ -359,6 +446,12 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
             // console.time('test');
             // console.timeEnd('test');
           });
+          it(`reads data length of ${d.length} bytes`, done => {
+            r(dk, (err, page, book) => {
+
+              done();
+            });
+          })
         });
       });
       return;
@@ -445,6 +538,26 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
     fs.rmdirSync(opt.file, { recursive: true });
   }
 
+  function timeRad(r) {
+    const ro = r;
+    function rTimingWrapper(...args) {
+      const cid = `${args[0]}`;
+      const cbidx = args.indexOf(args.find(a => 'function' === typeof a));
+      const callType = [-1, 1].includes(cbidx) ? 'read' : 'write';
+      // console.log(`${cid} ${callType}`);
+      const returnTimer = timer(`${cid} ${callType} return`);
+      const callbackTimer = timer(`${cid} ${callType} callback`);
+      const ret = ro(...args.map((a, i) => 'function' === typeof a ? (...cba) => {
+        // console.log(`callback ${cid}`, i);
+        callbackTimer(true);
+        a(...cba);
+      } : a));
+      returnTimer(false);
+      return ret;
+    }
+    return rTimingWrapper;
+  }
+
   function buildRad(opt) {
     return Radisk(opt);
   }
@@ -452,8 +565,10 @@ const SOUL_GAUNTLET = RAD_PATH_SEPARATORS
 
   function timer(name = 'default') {
     const start = Date.now();
-    return (stop = true) => {
-      console.log('%s took %dms', name, Date.now() - start);
+    return (announce = false) => {
+      const elapsed = Date.now() - start;
+      announce && console.log('%s took %dms', name, elapsed);
+      return elapsed;
     };
   }
 }(this));
