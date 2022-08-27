@@ -51,7 +51,9 @@ const Log = (function () {
 
     const l = function log(message, ...args) {
       // if (parent) return parent(message, ...args);
-      l.queue(''.padEnd(l.layer, '\t'), message, ...args);
+      const segments = [''.padEnd(l.layer, '\t'), message, ...args];
+      l.queue(...segments);
+      console.log(...segments);
       return l;
     };
     function info(...args) {
@@ -200,17 +202,17 @@ const OPT_DEFAULTS = {
     Gun = root.Gun;
   }
   require("../../lib/book");
-  Radix = Gun?.window?.Radix || require("../../lib/radix");
+  // Radix = Gun?.window?.Radix || require("../../lib/radix");
   Radisk = Gun?.window?.Radisk || require("../../lib/radisk3");
   RFS = Gun?.window?.RFS || require('../../lib/rfs');
   require('../../lib/store');
-  require('../../lib/rindexed');
+  // require('../../lib/rindexed');
   env.v8 = v8;
   env.os = os;
 
-  if (!root.Gun.SEA) {
-    require('../../sea.js');
-  }
+  // if (!root.Gun.SEA) {
+  //   require('../../sea.js');
+  // }
 
   let seq = 0;
 
@@ -280,6 +282,7 @@ const OPT_DEFAULTS = {
       });
     }
 
+
     describe.skip('backwards compatibility', () => {
       it('can read older file versions', done => {
         done('not implemented');
@@ -345,6 +348,187 @@ const OPT_DEFAULTS = {
             done();
           })
         })
+      });
+      [true, false].forEach(reset => {
+        [false, true].forEach(readonly => {
+          describe(`consecutive ${readonly ? 'read' : 'write+read'} using ${reset ? 'new' : 'existing'} Radisk`, () => {
+            if (!reset && !readonly) {
+              before(() => unpersist());
+            }
+            (reset ? beforeEach : before)(() => {
+              r = buildRad();
+            });
+            if (!readonly) {
+              it('writes a', done => {
+                r('a', 'a', () => {
+                  r('a', done);
+                })
+              });
+              it('writes b', done => {
+                r('b', 'b', () => {
+                  r('b', (err, page, book) => {
+                    done();
+                  });
+                })
+              });
+            }
+            it('reads a', done => {
+              r('a', (err, page, book) => {
+                expect(book('a')).to.eql('a');
+                done();
+              })
+            });
+            it('reads b (using test wrapper)', done => {
+              r('b', (err, page, book) => {
+                const v = getValueFromPage('b', page);
+                if (v !== 'b') {
+                  done('values did not match');
+                  return;
+                }
+                done();
+              })
+            });
+            it('reads b (using book())', done => {
+              r('b', (err, page, book) => {
+                const v = book('b', page);
+                if (v !== 'b') {
+                  done('values did not match');
+                  return;
+                }
+                done();
+              })
+            });
+          })
+        })
+      });
+      describe('length', function () {
+        before((done) => {
+          unpersist();
+          r = buildRad();
+          r('init', done);
+        });
+        [1000, 10000000].forEach(dataLength => {
+          [127, 255, BOOK_PAGE_SIZE - 10, BOOK_PAGE_SIZE, FS_PATH_MAX_LENGTH + FS_NAME_MAX_LENGTH + 2, FS_PATH_MAX_LENGTH * 10].forEach(pathLength => {
+            // TODO? Ask mark about path hashing, should it be expected to be a thing with book, because book incurs conversion cost anyway
+            const word = ''.padEnd(pathLength, `${pathLength}`);
+            const value = ''.padEnd(dataLength, `${pathLength}value`);
+            it(`write path.length ${pathLength} data.length ${dataLength}`, done => {
+              r(word, value, (...args) => {
+                // console.log({ args });
+                // r2 = buildRad();
+                r(word, (err, page, book) => {
+                  const value = book(word);
+                  expect(value).to.eql(value);
+                  done();
+                });
+              });
+              // done('not implemented');
+            });
+            it(`read path.length ${pathLength} data.length ${dataLength}`, done => {
+              r(word, (err, page, book) => {
+                const value = book(word);
+                if (value !== value) {
+                  console.log('unexpected value');
+                }
+                expect(value).to.eql(value);
+                done();
+              });
+            });
+          });
+        });
+
+        describe('longer than 255 (truncated)', () => {
+          before(() => {
+            r = buildRad();
+          })
+          const pathLength = 255;
+          const dataLength = 1000000;
+          const word = ''.padEnd(pathLength, `${pathLength}`) + 'a';
+          const word2 = ''.padEnd(pathLength, `${pathLength}`) + 'b';
+          const value = ''.padEnd(dataLength, `${pathLength}valuea`);
+          const value2 = ''.padEnd(dataLength, `${pathLength}valueb`);
+          it('writes', done => {
+            r(word, value, () => {
+              r(word, done);
+            })
+          });
+          it('reads', done => {
+            r(word, (err, page, book) => {
+              const got = book(word);
+              expect(got).to.be.ok();
+              if (got !== value) {
+                done('values did not match');
+                return;
+              }
+              done();
+            })
+          });
+          it('writes distinct path past 255', done => {
+            r(word2, value2, () => {
+              r(word2, done);
+            })
+          });
+          it('reads distinct path past 255', done => {
+            r(word2, (err, page, book) => {
+              const v = book(word2);
+              if (v !== value2) {
+                done('values did not match');
+                return;
+              }
+              done();
+            })
+          });
+        });
+      });
+      describe('separators', () => {
+        beforeEach(() => {
+          unpersist();
+          r = buildRad();
+        })
+        RAD_PATH_SEPARATORS.forEach(s => {
+          it(`supports '${s}' as a separator`, done => {
+            const soul = PATH_SEGMENTS.join(s);
+            r(soul, soul);
+            r(soul, (err, page, book) => {
+              expect(getValueFromPage(soul, page)).to.eql(soul);
+              done();
+            });
+          });
+          it('should separate two keys', (done) => {
+            seq++;
+            let soul = `a${seq}${s}a`;
+            let data = `data for '${soul}' ${seq}`;
+            r(soul, data);
+            r(soul, (err, res, o) => {
+              const rd = getValueFromPage(soul, res);
+              expect(rd).to.be.ok();
+              expect(rd).to.eql(data);
+              done();
+            });
+          });
+        });
+      });
+      describe('special characters in path', () => {
+        beforeEach(() => {
+          unpersist();
+          r = buildRad();
+        });
+        SOUL_GAUNTLET.forEach((soul, si) => {
+          it(`${si + 1} of ${SOUL_GAUNTLET.length} #:${ellipsis(50, encodeURIComponent(soul))}`, done => {
+            r(soul, soul, () => {
+              r(soul, (err, page, book) => {
+                expect(getValueFromPage(soul, page)).to.eql(soul);
+                done();
+              })
+            });
+          });
+          it(`${si + 1} of ${SOUL_GAUNTLET.length} #:${ellipsis(50, encodeURIComponent(soul))}`, done => {
+            r(soul, (err, page, book) => {
+              expect(getValueFromPage(soul, page)).to.eql(soul);
+              done();
+            });
+          });
+        });
       });
       describe.skip('attacks', () => {
         describe('attempt to overwrite !', () => {
@@ -431,183 +615,6 @@ const OPT_DEFAULTS = {
               expect(book).to.be.ok();
               expect(book('test')).to.eql('testvalue');
             });
-          });
-        });
-      });
-      [true, false].forEach(reset => {
-        [false, true].forEach(readonly => {
-          describe(`consecutive ${readonly ? 'read' : 'write+read'} using ${reset ? 'new' : 'existing'} Radisk`, () => {
-            if (!reset && !readonly) {
-              before(() => unpersist());
-            }
-            (reset ? beforeEach : before)(() => {
-              r = buildRad();
-            });
-            if (!readonly) {
-              it('writes a', done => {
-                r('a', 'a', () => {
-                  r('a', done);
-                })
-              });
-              it('writes b', done => {
-                r('b', 'b', () => {
-                  r('b', (err, page, book) => {
-                    done();
-                  });
-                })
-              });
-            }
-            it('reads a', done => {
-              r('a', (err, page, book) => {
-                expect(book('a')).to.eql('a');
-                done();
-              })
-            });
-            it('reads b (using test wrapper)', done => {
-              r('b', (err, page, book) => {
-                const v = getValueFromPage('b', page);
-                if (v !== 'b') {
-                  done('values did not match');
-                  return;
-                }
-                done();
-              })
-            });
-            it('reads b (using book())', done => {
-              r('b', (err, page, book) => {
-                const v = book('b', page);
-                if (v !== 'b') {
-                  done('values did not match');
-                  return;
-                }
-                done();
-              })
-            });
-          })
-        })
-      });
-
-      describe('length', function () {
-        before((done) => {
-          unpersist();
-          r = buildRad();
-          r('init', done);
-        });
-        [1000, 10000000].forEach(dataLength => {
-          [127, 255, BOOK_PAGE_SIZE - 10, BOOK_PAGE_SIZE, FS_PATH_MAX_LENGTH + FS_NAME_MAX_LENGTH + 2, FS_PATH_MAX_LENGTH * 10].forEach(pathLength => {
-            // TODO? Ask mark about path hashing, should it be expected to be a thing with book, because book incurs conversion cost anyway
-            const word = ''.padEnd(pathLength, `${pathLength}`);
-            const value = ''.padEnd(dataLength, `${pathLength}value`);
-            it(`write path.length ${pathLength} data.length ${dataLength}`, done => {
-              r(word, value, (...args) => {
-                // console.log({ args });
-                // r2 = buildRad();
-                r(word, (err, page, book) => {
-                  const value = book(word);
-                  expect(value).to.eql(value);
-                  done();
-                });
-              });
-              // done('not implemented');
-            });
-            it(`read path.length ${pathLength} data.length ${dataLength}`, done => {
-              r(word, (err, page, book) => {
-                const value = book(word);
-                if (value !== value) {
-                  console.log('unexpected value');
-                }
-                expect(value).to.eql(value);
-                done();
-              });
-            });
-          });
-        });
-
-        describe('longer than 255 (truncated)', () => {
-          before(() => {
-            r = buildRad();
-          })
-          const pathLength = 255;
-          const dataLength = 1000000;
-          const word = ''.padEnd(pathLength, `${pathLength}`) + 'a';
-          const word2 = ''.padEnd(pathLength, `${pathLength}`) + 'b';
-          const value = ''.padEnd(dataLength, `${pathLength}valuea`);
-          const value2 = ''.padEnd(dataLength, `${pathLength}valueb`);
-          it('writes', done => {
-            r(word, value, () => {
-              r(word, done);
-            })
-          });
-          it('reads', done => {
-            r(word, (err, page, book) => {
-              const got = book(word);
-              expect(got).to.be.ok();
-              if (got !== value) {
-                done('values did not match');
-                return;
-              }
-              done();
-            })
-          });
-          it('writes distinct path past 255', done => {
-            r(word2, value2, () => {
-              r(word2, done);
-            })
-          });
-          it('reads distinct path past 255', done => {
-            r(word2, (err, page, book) => {
-              const v = book(word2);
-              if (v !== value2) {
-                done('values did not match');
-                return;
-              }
-              done();
-            })
-          });
-        });
-      });
-
-      describe('separators', () => {
-        beforeEach(() => {
-          unpersist();
-          r = buildRad();
-        })
-        RAD_PATH_SEPARATORS.forEach(s => {
-          it(`supports '${s}' as a separator`, done => {
-            const soul = PATH_SEGMENTS.join(s);
-            r(soul, soul);
-            r(soul, (err, page, book) => {
-              expect(getValueFromPage(soul, page)).to.eql(soul);
-              done();
-            });
-          });
-          it('should separate two keys', (done) => {
-            seq++;
-            let soul = `a${seq}${s}a`;
-            let data = `data for '${soul}' ${seq}`;
-            r(soul, data);
-            r(soul, (err, res, o) => {
-              const rd = getValueFromPage(soul, res);
-              expect(rd).to.be.ok();
-              expect(rd).to.eql(data);
-              done();
-            });
-          });
-        });
-      });
-
-      describe('special characters in path', () => {
-        beforeEach(() => {
-          r = buildRad();
-        });
-        SOUL_GAUNTLET.forEach((soul, si) => {
-          it(`${si + 1} of ${SOUL_GAUNTLET.length} #:${ellipsis(50, encodeURIComponent(soul))}`, done => {
-            r(soul, soul);
-
-            r(soul, (err, page, book) => {
-              expect(getValueFromPage(soul, page)).to.eql(soul);
-              done();
-            })
           });
         });
       });
@@ -879,9 +886,83 @@ const OPT_DEFAULTS = {
         failures.push(failure);
       }
 
-    });
 
+    });
+    describe.only('shared roots', function () {
+      const rt = RadTestifier(buildOpt({ file: PATH_TO_TEST_DB }));
+      const tw = rt({ explain: true, newRad: false, clean: true });
+      tw('alex', 'a value for alex');
+      tw('alexandria', 'a value for alexandria');
+      tw('toast', 'a value for toast');
+    });
   });
+
+
+  function RadTestifier(radOrOpt) {
+    log = logger;
+
+    const testDefaults = () => ({ clean: true, write: true, read: true, newRad: true, explain: false });
+
+    const t = function testify(testOpt = testDefaults()) {
+      const opt = Object.assign({}, testDefaults(), testOpt || {});
+      return function (word, is) {
+        opt.clean && before(cleanFn());
+        opt.newRad ? beforeEach(makeRad()) : before(makeRad());
+        opt.clean && it(`isn't already defined`, done => read(rad, word, (data) => !data, done));
+        opt.write && it('write', done => write(rad, word, is, done));
+        // opt.newRad && it('create a new Rad', makeRad());
+        opt.read && it('read', done => read(rad, word, is, done));
+      }
+    };
+    let rad;
+
+    function write(rad, word, is, done) {
+      return rad(word, is, () => read(rad, word, is, done));
+    }
+    function read(rad, word, is, done) {
+      return rad(word, verifyFn(word, is, done));
+    }
+
+    function verifyFn(word, is, done) {
+      return function (err, page, book) {
+        expect(err).to.not.be.ok();
+        expect(page).to.be.ok();
+        expect(book).to.be.ok();
+        // expect(manualData).to.be.ok();
+        const data = book(word);
+        if ('function' === typeof is) {
+          expect(is(data)).to.be.ok();
+          done();
+          return;
+        }
+        if (data !== is) {
+          const manualData = getValueFromPage(word, page);
+          if (manualData === is) {
+            log('manual search found a match...');
+          }
+          expect(data).to.eql(is);
+          done('data did not match');
+          return;
+        }
+        done();
+      }
+    }
+    function cleanFn() {
+      return done => {
+        unpersist(radOrOpt);
+        done();
+      }
+    }
+    function makeRad(opt = radOrOpt) {
+      return done => {
+        // rad = buildRad(opt);
+        rad = buildRad(opt);
+        rad('init', done);
+        // done();
+      }
+    }
+    return t;
+  }
 
   function unpersist(opt) {
     opt = opt || { file: PATH_TO_TEST_DB };
@@ -908,6 +989,7 @@ const OPT_DEFAULTS = {
 
   function buildRad(overrides = {}) {
     const opts = buildOpt(overrides);
+    // console.log('building Radisk with', opts);
     return Radisk(opts);
   }
 
