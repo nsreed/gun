@@ -209,11 +209,6 @@ const OPT_DEFAULTS = {
   // require('../../lib/rindexed');
   env.v8 = v8;
   env.os = os;
-
-  // if (!root.Gun.SEA) {
-  //   require('../../sea.js');
-  // }
-
   let seq = 0;
 
   describe('radisk3', function () {
@@ -233,9 +228,9 @@ const OPT_DEFAULTS = {
     beforeEach(function () {
       log = logger.get(this.currentTest.title);
       timer = Stopwatch({ log });
+      log.layer = 0;
+      // log(this.currentTest?.title);
       log.layer = 1;
-      log(this.currentTest?.title);
-      log.layer = 2;
     })
 
     after(() => {
@@ -618,12 +613,21 @@ const OPT_DEFAULTS = {
           });
         });
       });
+
+      describe('shared roots', function () {
+        const rt = RadTestifier(buildOpt({ file: PATH_TO_TEST_DB }));
+        const tw = rt({ explain: true, newRad: false, clean: true });
+        tw('alex', 'a value for alex');
+        tw('alexandria', 'a value for alexandria');
+        // tw('ale') // What should this do?
+        tw('toast', 'a value for toast');
+      });
     });
 
     describe('data', () => {
       before(() => {
         unpersist();
-        r = buildRad();
+        // r = buildRad();
       });
       describe('primitives', () => {
         const GUN_PRIMITIVES = [
@@ -709,9 +713,8 @@ const OPT_DEFAULTS = {
           });
         });
       });
-
-
       const LONG_DATAS = DATA_LENGTHS.map(l => ''.padEnd(l, `${l}B `));
+
       describe('length', function () {
         before(done => {
           unpersist();
@@ -785,6 +788,15 @@ const OPT_DEFAULTS = {
               done();
             });
           })
+        });
+      });
+
+      LONG_DATAS.forEach(ld => {
+        describe(`data length ${ld.length} bytes`, function () {
+          // TODO refactor RadTestifier to work like it('writes', testify('alice','value')); you're creating a bunch of Rads at once and it's bad.
+          const rt = RadTestifier(buildOpt({ file: PATH_TO_TEST_DB }));
+          const tw = rt({ clean: true, newRad: true });
+          tw(`sizeof.${ld.length}`, ld);
         });
       });
     });
@@ -885,15 +897,6 @@ const OPT_DEFAULTS = {
       function addFailure(failure) {
         failures.push(failure);
       }
-
-
-    });
-    describe.only('shared roots', function () {
-      const rt = RadTestifier(buildOpt({ file: PATH_TO_TEST_DB }));
-      const tw = rt({ explain: true, newRad: false, clean: true });
-      tw('alex', 'a value for alex');
-      tw('alexandria', 'a value for alexandria');
-      tw('toast', 'a value for toast');
     });
   });
 
@@ -901,17 +904,40 @@ const OPT_DEFAULTS = {
   function RadTestifier(radOrOpt) {
     log = logger;
 
-    const testDefaults = () => ({ clean: true, write: true, read: true, newRad: true, explain: false });
+    const testDefaults = () => ({
+      /** Whether to remove 'file' */
+      clean: true,
+      /** Perform the write step? (or reading from existing file?) */
+      write: true,
+      /** Perform the read step? */
+      read: true,
+      /** Create a new Radisk instance for reading? */
+      newRad: true,
+      /** Try to explain why tests fail */
+      explain: false
+    });
 
     const t = function testify(testOpt = testDefaults()) {
       const opt = Object.assign({}, testDefaults(), testOpt || {});
-      return function (word, is) {
+      return function (word, is, finish) {
+        if (finish) {
+          // assume the setup work has been done?
+          makeRad(radOrOpt, () => {
+            opt.clean && cleanFn()();
+            opt.write && write(rad, word, is, () => {
+              opt.newRad && makeRad(radOrOpt);
+              opt.read && read(rad, word, is, finish);
+            });
+          });
+          return t;
+        }
         opt.clean && before(cleanFn());
         opt.newRad ? beforeEach(makeRad()) : before(makeRad());
         opt.clean && it(`isn't already defined`, done => read(rad, word, (data) => !data, done));
         opt.write && it('write', done => write(rad, word, is, done));
         // opt.newRad && it('create a new Rad', makeRad());
         opt.read && it('read', done => read(rad, word, is, done));
+        return t;
       }
     };
     let rad;
@@ -928,7 +954,6 @@ const OPT_DEFAULTS = {
         expect(err).to.not.be.ok();
         expect(page).to.be.ok();
         expect(book).to.be.ok();
-        // expect(manualData).to.be.ok();
         const data = book(word);
         if ('function' === typeof is) {
           expect(is(data)).to.be.ok();
@@ -940,7 +965,7 @@ const OPT_DEFAULTS = {
           if (manualData === is) {
             log('manual search found a match...');
           }
-          expect(data).to.eql(is);
+          // expect(data).to.eql(is);
           done('data did not match');
           return;
         }
@@ -950,16 +975,62 @@ const OPT_DEFAULTS = {
     function cleanFn() {
       return done => {
         unpersist(radOrOpt);
-        done();
+        done && done();
       }
     }
     function makeRad(opt = radOrOpt) {
-      return done => {
-        // rad = buildRad(opt);
-        rad = buildRad(opt);
-        rad('init', done);
-        // done();
+      if ('function' === typeof radOrOpt) {
+        return radOrOpt;
       }
+      return done => {
+        rad = buildRad(opt);
+        rad('init', (err, page, book) => {
+          rad.book = watch(rad.book);
+          rad = watch(rad);
+          done && done.call && done();
+        });
+      }
+    }
+    function watch(subject, { before, after } = {}) {
+      return subject; // TODO remove this when ready to add perf
+      if (!subject) return;
+      if (subject.__watched) {
+        return subject;
+      }
+
+      const w = function watcher(...args) {
+        let ret;
+        const subject = w.subject;
+        try {
+          before && before(args, subject);
+          ret = subject.call(subject, ...args);
+        } catch (e) {
+          log(`ERR! in ${subject.name}()`, e);
+        } finally {
+          after && after(ret, args, subject);
+        }
+        return ret;
+      }
+
+      w.subject = subject;
+
+      const wProto = Object.entries(subject).reduce((proto, subjectProp) => {
+        const propVal = subjectProp[1], propName = subjectProp[0];
+        if ('function' === typeof propVal) {
+          proto[propName] = (...args) => {
+            log(`${propVal.name}()`);
+            const ret = propVal.call(subject, ...args);
+            return ret;
+          }
+        } else {
+          proto[propName] = (propVal);
+        }
+        return proto;
+      }, { __watched: true });
+
+      Object.assign(w, wProto);
+
+      return w;
     }
     return t;
   }
